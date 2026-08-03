@@ -40,6 +40,7 @@ const COMMANDS = [
   "setFormatHeadingMedium",
   "setFormatHeadingSmall",
   "setFormatParagraph",
+  "applyHeadingFormat",
   "clearFormatting",
   "insertUnorderedList",
   "insertOrderedList",
@@ -232,19 +233,23 @@ export class CommandDispatcher {
   }
 
   dispatchSetFormatHeadingLarge() {
-    this.contents.applyHeadingFormat("h2")
+    this.#applyConfiguredHeadingFormat(0)
   }
 
   dispatchSetFormatHeadingMedium() {
-    this.contents.applyHeadingFormat("h3")
+    this.#applyConfiguredHeadingFormat(1)
   }
 
   dispatchSetFormatHeadingSmall() {
-    this.contents.applyHeadingFormat("h4")
+    this.#applyConfiguredHeadingFormat(2)
   }
 
   dispatchSetFormatParagraph() {
     this.contents.applyParagraphFormat()
+  }
+
+  dispatchApplyHeadingFormat(tag) {
+    this.contents.applyHeadingFormat(tag)
   }
 
   dispatchClearFormatting() {
@@ -293,6 +298,11 @@ export class CommandDispatcher {
 
   dispose() {
     this.#listeners.dispose()
+  }
+
+  #applyConfiguredHeadingFormat(index) {
+    const tag = this.editorElement.config.get("headings")[index]
+    if (tag) this.contents.applyHeadingFormat(tag)
   }
 
   #registerCommands() {

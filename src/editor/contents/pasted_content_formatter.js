@@ -1,14 +1,32 @@
+import OfficeFormatter from "./pasted_content_formatter/office_formatter"
+
 export default class PastedContentFormatter {
   constructor(doc) {
     this.doc = doc
   }
 
   format() {
+    this.#stripStyleElements()
     this.#unwrapPlaceholderAnchors()
     this.#stripTableCellColorStyles()
+    new OfficeFormatter(this.doc).format()
+    this.#unwrapWrappedListChildren()
     this.#nestStrayListChildren()
     this.#stripStrayListChildren()
+    this.#replaceGmailEmojiImgTags()
     return this.doc
+  }
+
+  // Spreadsheets (e.g. Excel) copy a <style> block whose rules (td { color:
+  // black }, .xlNN { ... }) cascade onto the imported text. That color rides
+  // in through the cascade rather than an inline style, so it slips past both
+  // the cell-level stripping below and the paste style canonicalizer, leaving
+  // pasted tables with foreign text colors that don't adapt to the theme. Drop
+  // foreign style sheets so nothing cascades into imported content.
+  #stripStyleElements() {
+    for (const style of this.doc.querySelectorAll("style")) {
+      style.remove()
+    }
   }
 
   // Anchors with non-meaningful hrefs (e.g. "#", "") appear in content copied
@@ -35,6 +53,29 @@ export default class PastedContentFormatter {
     }
   }
 
+  // Some sources wrap runs of <li>s in a stray element (e.g. a <div> directly
+  // inside the list). Dissolve such wrappers so their items become direct
+  // list children and any nested list they hide becomes visible to
+  // #nestStrayListChildren below.
+  #unwrapWrappedListChildren() {
+    for (const list of this.doc.querySelectorAll("ol, ul")) {
+      let wrapper = this.#wrappedListChild(list)
+      while (wrapper) {
+        wrapper.replaceWith(...wrapper.childNodes)
+        wrapper = this.#wrappedListChild(list)
+      }
+    }
+  }
+
+  #wrappedListChild(list) {
+    for (const child of list.children) {
+      if (child.tagName !== "LI" && !this.#isNestedList(child) && this.#containsListItems(child)) {
+        return child
+      }
+    }
+    return null
+  }
+
   // Some sources (e.g. Gmail) nest a sublist as a direct child of the parent
   // <ol>/<ul> instead of inside a <li>. Move each nested list into its
   // preceding <li> so the import preserves the nesting instead of dropping it.
@@ -51,13 +92,48 @@ export default class PastedContentFormatter {
     }
   }
 
-  // Only <li> is a valid child of a list; drop stray <br>/whitespace so the
-  // import doesn't wrap them into an empty leading item.
+  // Only <li> is a valid child of a list. Unwrap remaining stray children
+  // that still hold list items (a nested list with no preceding <li> to nest
+  // under) so the items survive, and drop stray <br>/whitespace so the import
+  // doesn't wrap them into an empty leading item.
   #stripStrayListChildren() {
     for (const list of this.doc.querySelectorAll("ol, ul")) {
-      for (const child of Array.from(list.childNodes)) {
-        if (child.nodeType === Node.ELEMENT_NODE && child.tagName === "LI") continue
-        list.removeChild(child)
+      let stray = this.#firstStrayListChild(list)
+      while (stray) {
+        if (this.#containsListItems(stray)) {
+          stray.replaceWith(...stray.childNodes)
+        } else {
+          stray.remove()
+        }
+
+        stray = this.#firstStrayListChild(list)
+      }
+    }
+  }
+
+  #firstStrayListChild(list) {
+    for (const child of list.childNodes) {
+      if (child.nodeType !== Node.ELEMENT_NODE || child.tagName !== "LI") {
+        return child
+      }
+    }
+    return null
+  }
+
+  #isNestedList(node) {
+    return node.nodeType === Node.ELEMENT_NODE && (node.tagName === "OL" || node.tagName === "UL")
+  }
+
+  #containsListItems(node) {
+    return node.nodeType === Node.ELEMENT_NODE && node.querySelector("li") !== null
+  }
+
+  // Emoji in gmail: <img data-emoji="😂" class="an1" alt="😂" aria-label="😂" draggable="false" src="https://fonts.gstatic.com/s/e/notoemoji/17.0/1f602/32.png" loading="lazy" style="height: 1.2em; width: 1.2em; vertical-align: middle;">
+  #replaceGmailEmojiImgTags() {
+    for (const emojiImg of this.doc.querySelectorAll("img[data-emoji]")) {
+      const emoji = emojiImg.dataset.emoji
+      if (emoji === emojiImg.alt) {
+        emojiImg.replaceWith(emoji)
       }
     }
   }

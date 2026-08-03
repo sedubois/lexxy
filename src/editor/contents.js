@@ -60,6 +60,20 @@ export default class Contents {
     }, { tag })
   }
 
+  // A literal "\n" stays visible in the editor, which Lexical renders with white-space: pre-wrap,
+  // but collapses to a space once serialized to HTML, so it has to become line break nodes.
+  insertTextWithLineBreaks(text) {
+    const normalizedText = text?.replace(/\r\n?/g, "\n")
+    const selection = $getSelection()
+
+    if (normalizedText?.includes("\n") && $isRangeSelection(selection)) {
+      selection.insertRawText(normalizedText)
+      return true
+    } else {
+      return false
+    }
+  }
+
   insertAtCursor(...nodes) {
     const selection = this.#insertableSelection()
     const inserter = NodeInserter.for(selection)
@@ -217,16 +231,34 @@ export default class Contents {
     return result
   }
 
-  // The query runs from the trigger up to the next whitespace, even when the
+  // The query runs from the trigger up to the next boundary, even when the
   // cursor sits inside an existing word — inserting "@" before "Jack" must
   // filter by "Jack" rather than treating the prompt as empty.
   #endOffsetAt(fullText, cursorOffset) {
-    const whitespaceOffset = fullText.slice(cursorOffset).search(/\s/)
-    if (whitespaceOffset === -1) {
-      return fullText.length
-    } else {
-      return cursorOffset + whitespaceOffset
+    for (let offset = cursorOffset; offset < fullText.length; offset++) {
+      if (this.#isQueryBoundary(fullText, offset)) {
+        return offset
+      }
     }
+
+    return fullText.length
+  }
+
+  // Whitespace always ends the query. Punctuation ends it too: with "@" typed
+  // right before a period, extending across it would glue "." onto everything
+  // typed ("B" would query "B."), matching the wrong names or nothing at all.
+  // But punctuation joining two word characters is part of a name — "@" before
+  // "Anne-Marie" or "O'Connor" must keep the whole name as the query.
+  #isQueryBoundary(fullText, offset) {
+    const character = fullText[offset]
+    if (/\s/.test(character)) return true
+    if (!/\p{P}/u.test(character)) return false
+
+    return !(this.#isWordCharacter(fullText[offset - 1]) && this.#isWordCharacter(fullText[offset + 1]))
+  }
+
+  #isWordCharacter(character) {
+    return character != null && /[\p{L}\p{N}]/u.test(character)
   }
 
   containsTextBackUntil(string) {
@@ -579,17 +611,15 @@ export default class Contents {
     return { anchorNode, offset: anchor.offset }
   }
 
-  // The replaced span can straddle the cursor (e.g. "@Jack" when "@" was just
-  // inserted before "Jack"), so we anchor on the trigger before the cursor and
-  // verify the whole string matches there rather than searching text up to it.
+  // The replaced span must start before the cursor but can extend past it
+  // (e.g. "@Jack" when "@" was just inserted before "Jack"), so we bound the
+  // match's start with lastIndexOf's fromIndex rather than slicing the text.
   #findReplacementStart(anchorNode, offset, stringToReplace) {
-    const fullText = anchorNode.getTextContent()
-    const triggerIndex = fullText.slice(0, offset).lastIndexOf(stringToReplace[0])
-
-    if (triggerIndex !== -1 && fullText.startsWith(stringToReplace, triggerIndex)) {
-      return triggerIndex
-    } else {
+    if (offset === 0) {
+      // A negative fromIndex clamps to 0 and could match at the cursor
       return -1
+    } else {
+      return anchorNode.getTextContent().lastIndexOf(stringToReplace, offset - 1)
     }
   }
 
